@@ -30,15 +30,20 @@ export class ExchangeService {
       wsUrl: 'wss://stream.bybit.com/v5/public/linear',
       color: '#f7931a',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.bybit.com/v5/market/funding/history?category=linear&limit=200');
+        const response = await fetch('https://api.bybit.com/v5/market/tickers?category=linear', {
+          headers: {
+            'User-Agent': 'FundingRateMonitor/1.0',
+            'Accept': 'application/json'
+          }
+        });
         const data = await response.json();
         return data.result?.list || [];
       },
       parseFundingRate: (data: any) => ({
         pairId: 0, // Will be set later
         symbol: data.symbol,
-        fundingRate: data.fundingRate,
-        nextFundingTime: new Date(parseInt(data.fundingRateTimestamp)),
+        fundingRate: String(data.fundingRate || '0'),
+        nextFundingTime: new Date(Date.now() + 8 * 60 * 60 * 1000), // 8 hours from now
         timestamp: new Date(),
       }),
     });
@@ -50,14 +55,19 @@ export class ExchangeService {
       apiUrl: 'https://api.huobi.pro',
       color: '#2e7bff',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.huobi.pro/swap-api/v1/swap_batch_funding_rate');
+        const response = await fetch('https://api.hbdm.com/swap-api/v1/swap_batch_funding_rate', {
+          headers: {
+            'User-Agent': 'FundingRateMonitor/1.0',
+            'Accept': 'application/json'
+          }
+        });
         const data = await response.json();
         return data.data || [];
       },
       parseFundingRate: (data: any) => ({
         pairId: 0,
         symbol: data.contract_code,
-        fundingRate: data.funding_rate,
+        fundingRate: String(data.funding_rate || '0'),
         nextFundingTime: new Date(data.next_funding_time),
         timestamp: new Date(),
       }),
@@ -70,9 +80,14 @@ export class ExchangeService {
       apiUrl: 'https://api.gateio.ws',
       color: '#7c3aed',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.gateio.ws/api/v4/futures/usdt/funding_rate');
+        const response = await fetch('https://api.gateio.ws/api/v4/futures/usdt/funding_rate', {
+          headers: {
+            'User-Agent': 'FundingRateMonitor/1.0',
+            'Accept': 'application/json'
+          }
+        });
         const data = await response.json();
-        return data || [];
+        return Array.isArray(data) ? data : [];
       },
       parseFundingRate: (data: any) => ({
         pairId: 0,
@@ -213,10 +228,28 @@ export class ExchangeService {
 
     try {
       const rawData = await config.fetchFundingRates();
-      const fundingRates: InsertFundingRate[] = rawData.map(data => ({
-        ...config.parseFundingRate(data),
-        exchangeId: exchange.id,
-      }));
+      const fundingRates: InsertFundingRate[] = [];
+      for (const data of rawData) {
+        try {
+          const parsedRate = config.parseFundingRate(data);
+          // Create or find trading pair
+          const pair = await this.storage.upsertTradingPair({
+            symbol: parsedRate.symbol,
+            baseAsset: parsedRate.symbol.replace(/USDT|USD|BUSD/, ''),
+            quoteAsset: parsedRate.symbol.includes('USDT') ? 'USDT' : 'USD',
+            exchangeId: exchange.id,
+            isActive: true,
+          });
+          
+          fundingRates.push({
+            ...parsedRate,
+            exchangeId: exchange.id,
+            pairId: pair.id,
+          });
+        } catch (error) {
+          console.error(`Failed to process funding rate:`, error);
+        }
+      }
 
       if (fundingRates.length > 0) {
         await this.storage.insertFundingRates(fundingRates);
