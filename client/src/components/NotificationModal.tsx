@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { useI18n } from '@/hooks/useI18n';
@@ -68,7 +68,7 @@ export function NotificationModal({ isOpen, onClose }: NotificationModalProps) {
   });
 
   // Initialize form with existing settings
-  React.useEffect(() => {
+  useEffect(() => {
     if (settings) {
       setThresholdPercent(settings.thresholdPercent || '0.200');
       setFrequencyMinutes(settings.frequencyMinutes?.toString() || '60');
