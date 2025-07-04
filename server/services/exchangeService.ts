@@ -30,7 +30,7 @@ export class ExchangeService {
       wsUrl: 'wss://stream.bybit.com/v5/public/linear',
       color: '#f7931a',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.bybit.com/v5/market/tickers?category=linear', {
+        const response = await fetchWithRetry('https://api.bybit.com/v5/market/tickers?category=linear', {
           headers: {
             'User-Agent': 'FundingRateMonitor/1.0',
             'Accept': 'application/json'
@@ -55,7 +55,7 @@ export class ExchangeService {
       apiUrl: 'https://api.huobi.pro',
       color: '#2e7bff',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.hbdm.com/swap-api/v1/swap_batch_funding_rate', {
+        const response = await fetchWithRetry('https://api.hbdm.com/swap-api/v1/swap_batch_funding_rate', {
           headers: {
             'User-Agent': 'FundingRateMonitor/1.0',
             'Accept': 'application/json'
@@ -80,14 +80,37 @@ export class ExchangeService {
       apiUrl: 'https://api.gateio.ws',
       color: '#7c3aed',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.gateio.ws/api/v4/futures/usdt/funding_rate', {
+        // 1. Получаем список контрактов
+        const contractsRes = await fetchWithRetry('https://api.gateio.ws/api/v4/futures/usdt/contracts', {
           headers: {
             'User-Agent': 'FundingRateMonitor/1.0',
             'Accept': 'application/json'
           }
         });
-        const data = await response.json();
-        return Array.isArray(data) ? data : [];
+        const contracts = await contractsRes.json();
+        // 2. Для каждого контракта получаем funding rate
+        const rates: any[] = [];
+        for (const contract of contracts) {
+          try {
+            const rateRes = await fetchWithRetry(
+              `https://api.gateio.ws/api/v4/futures/usdt/funding_rate?contract=${contract.name}`,
+              {
+                headers: {
+                  'User-Agent': 'FundingRateMonitor/1.0',
+                  'Accept': 'application/json'
+                }
+              }
+            );
+            const rate = await rateRes.json();
+            if (rate) {
+              rate.contract = contract.name;
+              rates.push(rate);
+            }
+          } catch (err) {
+            console.warn(`[Gate.io] Failed to fetch funding rate for contract ${contract.name}:`, err);
+          }
+        }
+        return rates;
       },
       parseFundingRate: (data: any) => ({
         pairId: 0,
@@ -105,17 +128,43 @@ export class ExchangeService {
       apiUrl: 'https://api.bitget.com',
       color: '#f59e0b',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.bitget.com/api/mix/v1/market/current-fundRate?productType=umcbl');
-        const data = await response.json();
-        return data.data || [];
+        // Получаем список всех символов
+        const symbolsRes = await fetchWithRetry('https://api.bitget.com/api/mix/v1/market/symbols');
+        const symbolsData = await symbolsRes.json();
+        // Фильтруем только нужные контракты (например, USDT-margined)
+        const symbols = (symbolsData.data || []).filter((s: any) => s.productType === 'umcbl');
+        const rates: any[] = [];
+        for (const symbolObj of symbols) {
+          const symbol = symbolObj.symbol;
+          try {
+            const rateRes = await fetchWithRetry(
+              `https://api.bitget.com/api/mix/v1/market/funding-rate?symbol=${symbol}`
+            );
+            const rateData = await rateRes.json();
+            if (rateData.data && rateData.data.nextSettleTime) {
+              rateData.data.symbol = symbol;
+              rates.push(rateData.data);
+            }
+          } catch (err) {
+            console.warn(`[Bitget] Failed to fetch funding rate for symbol ${symbol}:`, err);
+          }
+        }
+        return rates;
       },
-      parseFundingRate: (data: any) => ({
-        pairId: 0,
-        symbol: data.symbol,
-        fundingRate: data.fundingRate,
-        nextFundingTime: new Date(parseInt(data.nextSettleTime)),
-        timestamp: new Date(),
-      }),
+      parseFundingRate: (data: any) => {
+        // Проверяем валидность даты
+        const nextFundingTime = new Date(parseInt(data.nextSettleTime));
+        if (isNaN(nextFundingTime.getTime())) {
+          throw new Error(`Invalid nextSettleTime for symbol ${data.symbol}`);
+        }
+        return {
+          pairId: 0,
+          symbol: data.symbol,
+          fundingRate: data.fundingRate,
+          nextFundingTime,
+          timestamp: new Date(),
+        };
+      },
     });
 
     // MEXC
@@ -125,15 +174,34 @@ export class ExchangeService {
       apiUrl: 'https://api.mexc.com',
       color: '#ef4444',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api.mexc.com/api/v3/premiumIndex');
-        const data = await response.json();
-        return data || [];
+        // 1. Получаем список всех контрактов
+        const contractsRes = await fetchWithRetry('https://contract.mexc.com/api/v1/contract/detail');
+        const contractsData = await contractsRes.json();
+        const contracts = contractsData.data || [];
+        // 2. Для каждого контракта получаем funding rate
+        const rates: any[] = [];
+        for (const contract of contracts) {
+          const symbol = contract.symbol;
+          try {
+            const rateRes = await fetchWithRetry(
+              `https://contract.mexc.com/api/v1/contract/funding_rate/${symbol}`
+            );
+            const rateData = await rateRes.json();
+            if (rateData.data) {
+              rateData.data.symbol = symbol;
+              rates.push(rateData.data);
+            }
+          } catch (err) {
+            console.warn(`[MEXC] Failed to fetch funding rate for symbol ${symbol}:`, err);
+          }
+        }
+        return rates;
       },
       parseFundingRate: (data: any) => ({
         pairId: 0,
         symbol: data.symbol,
-        fundingRate: data.lastFundingRate,
-        nextFundingTime: new Date(data.nextFundingTime),
+        fundingRate: data.fundingRate,
+        nextFundingTime: new Date(data.nextSettleTime),
         timestamp: new Date(),
       }),
     });
@@ -145,7 +213,7 @@ export class ExchangeService {
       apiUrl: 'https://open-api.bingx.com',
       color: '#06b6d4',
       fetchFundingRates: async () => {
-        const response = await fetch('https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex');
+        const response = await fetchWithRetry('https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex');
         const data = await response.json();
         return data.data || [];
       },
@@ -165,7 +233,7 @@ export class ExchangeService {
       apiUrl: 'https://api-cloud.bitmart.com',
       color: '#8b5cf6',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api-cloud.bitmart.com/contract/public/details');
+        const response = await fetchWithRetry('https://api-cloud.bitmart.com/contract/public/details');
         const data = await response.json();
         return data.data?.symbols || [];
       },
@@ -185,7 +253,7 @@ export class ExchangeService {
       apiUrl: 'https://api-futures.kucoin.com',
       color: '#10b981',
       fetchFundingRates: async () => {
-        const response = await fetch('https://api-futures.kucoin.com/api/v1/funding-rate/list');
+        const response = await fetchWithRetry('https://api-futures.kucoin.com/api/v1/funding-rate/list');
         const data = await response.json();
         return data.data || [];
       },
@@ -240,7 +308,7 @@ export class ExchangeService {
             exchangeId: exchange.id,
             isActive: true,
           });
-          
+
           fundingRates.push({
             ...parsedRate,
             exchangeId: exchange.id,
@@ -269,7 +337,7 @@ export class ExchangeService {
       // Set up interval for periodic fetching (every minute)
       const interval = setInterval(async () => {
         await this.fetchExchangeData(exchangeName);
-        
+
         // Trigger data update callback
         if (this.dataUpdateCallback) {
           const latestRates = await this.storage.getLatestFundingRates();
@@ -295,4 +363,29 @@ export class ExchangeService {
   onDataUpdate(callback: (rates: FundingRateWithExchange[]) => void) {
     this.dataUpdateCallback = callback;
   }
+}
+
+// --- Добавляем универсальную функцию fetchWithRetry ---
+async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 3, timeout = 10000): Promise<Response> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(id);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text}`);
+      }
+      return response;
+    } catch (error) {
+      if (attempt === retries) {
+        console.error(`[fetchWithRetry] Failed after ${retries} attempts:`, { url, error });
+        throw error;
+      }
+      console.warn(`[fetchWithRetry] Attempt ${attempt} failed for ${url}:`, error);
+      await new Promise(res => setTimeout(res, 500 * Math.pow(2, attempt)));
+    }
+  }
+  throw new Error('Unreachable');
 }

@@ -2,7 +2,6 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
 import { ExchangeService } from "./services/exchangeService";
 import { TelegramService } from "./services/telegramService";
 import { NotificationService } from "./services/notificationService";
@@ -20,14 +19,11 @@ interface WebSocketClient {
 const clients: Set<WebSocketClient> = new Set();
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
-
   // Initialize exchanges
   await exchangeService.initializeExchanges();
 
   // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  app.get('/api/auth/user', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const user = await storage.getUser(userId);
@@ -125,7 +121,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Notification routes
-  app.get('/api/notifications/settings', isAuthenticated, async (req: any, res) => {
+  app.get('/api/notifications/settings', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const settings = await storage.getNotificationSettings(userId);
@@ -136,7 +132,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/notifications/settings', isAuthenticated, async (req: any, res) => {
+  app.post('/api/notifications/settings', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const validatedData = insertNotificationSettingsSchema.parse({
@@ -153,7 +149,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Custom alerts routes
-  app.get('/api/alerts', isAuthenticated, async (req: any, res) => {
+  app.get('/api/alerts', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const alerts = await storage.getCustomAlerts(userId);
@@ -164,7 +160,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/alerts', isAuthenticated, async (req: any, res) => {
+  app.post('/api/alerts', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const validatedData = insertCustomAlertSchema.parse({
@@ -180,7 +176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete('/api/alerts/:id', isAuthenticated, async (req: any, res) => {
+  app.delete('/api/alerts/:id', async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
       const alertId = Number(req.params.id);
