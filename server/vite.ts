@@ -50,6 +50,7 @@ export async function setupVite(app: Express, server: Server) {
         "client",
         "index.html",
       );
+      console.log("[VITE] clientTemplate path:", clientTemplate);
 
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
       template = template.replace(
@@ -67,6 +68,7 @@ export async function setupVite(app: Express, server: Server) {
 
 export function serveStatic(app: Express) {
   const distPath = path.resolve(process.cwd(), "dist", "public");
+  console.log("[VITE] distPath:", distPath);
 
   if (!fs.existsSync(distPath)) {
     throw new Error(
